@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Águia Prata • Sistema de Ponto</title>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f9;color:#17243a}
+header{background:linear-gradient(135deg,#10233f,#29466d);color:#fff;padding:24px;border-radius:0 0 22px 22px}
+main{max-width:560px;margin:auto;padding:18px}.card{background:#fff;padding:20px;border-radius:18px;margin:14px 0;box-shadow:0 5px 20px #0001}
+.logo{font-size:22px;font-weight:800}input{width:100%;padding:13px;margin:6px 0 12px;border:1px solid #d5dce5;border-radius:10px;box-sizing:border-box;font-size:16px}
+button{padding:13px 15px;border:0;border-radius:11px;font-weight:700}.primary{background:#10233f;color:#fff}.green{background:#1f9d67;color:#fff}.red{background:#c53b4b;color:#fff}.gray{background:#e8edf3}.row{display:flex;gap:8px;flex-wrap:wrap}.hidden{display:none}.status{padding:11px;margin-top:12px;border-radius:10px;background:#eef3f8}.ok{background:#e7f7ef;color:#176847}.err{background:#ffedef;color:#9a2938}
+</style>
+</head>
+<body>
+<header><div class="logo">🦅 ÁGUIA PRATA</div><div>Sistema de Ponto</div></header>
+<main>
+<section id="login" class="card">
+<h2>Entrar</h2>
+<label>Usuário</label><input id="u" placeholder="Ex.: marcelo" autocomplete="username">
+<label>Senha</label><input id="p" type="password" autocomplete="current-password">
+<button class="primary" style="width:100%" onclick="login()">Entrar</button>
+<div id="lm"></div>
+</section>
+<section id="app" class="hidden">
+<div class="card">
+<h2 id="w"></h2>
+<p>Permita a localização para registrar cada batida.</p>
+<div class="row">
+<button class="green" onclick="ponto('Entrada')">Entrada</button>
+<button class="gray" onclick="ponto('Início do intervalo')">Início intervalo</button>
+<button class="gray" onclick="ponto('Fim do intervalo')">Fim intervalo</button>
+<button class="red" onclick="ponto('Saída')">Saída</button>
+</div>
+<div id="s" class="status">Pronto.</div>
+</div>
+<div class="card"><h3>Meus registros</h3><div id="r">Nenhum registro.</div></div>
+<button class="gray" onclick="location.reload()">Sair</button>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/*
+  CONFIGURAÇÃO:
+  Substitua somente os dois valores abaixo pelos dados públicos
+  do seu projeto Supabase. NUNCA use service_role ou sb_secret.
+*/
+const URL_SUPABASE="https://yzebughwdzljbrlwamjo.supabase.co";
+const ANON_KEY="COLE_AQUI_A_CHAVE_ANON_PUBLICA";
+let db=null,emp=null;
+
+function init(){
+  if(!URL_SUPABASE.startsWith("http") || ANON_KEY.startsWith("COLE_")){
+    document.getElementById("lm").innerHTML='<div class="status err">O sistema ainda precisa ser conectado ao Supabase.</div>';
+    return false;
+  }
+  if(!db) db=supabase.createClient(URL_SUPABASE,ANON_KEY);
+  return true;
+}
+
+async function login(){
+  if(!init()) return;
+  const u=document.getElementById("u").value.trim().toLowerCase();
+  const pw=document.getElementById("p").value;
+  document.getElementById("lm").textContent="Entrando...";
+  const a=await db.auth.signInWithPassword({email:u+"@aguia-prata.local",password:pw});
+  if(a.error){
+    document.getElementById("lm").innerHTML='<div class="status err">Usuário ou senha inválidos.</div>';
+    return;
+  }
+  const q=await db.from("employees").select("*").eq("username",u).maybeSingle();
+  if(q.error || !q.data){
+    await db.auth.signOut();
+    document.getElementById("lm").innerHTML='<div class="status err">Funcionário não encontrado.</div>';
+    return;
+  }
+  emp=q.data;
+  document.getElementById("login").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  document.getElementById("w").textContent="Olá, "+emp.name+"!";
+  load();
+}
+
+async function ponto(tipo){
+  const st=document.getElementById("s");
+  st.className="status"; st.textContent="Obtendo localização...";
+  if(!navigator.geolocation){
+    st.className="status err"; st.textContent="Este aparelho não oferece localização."; return;
+  }
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    const c=pos.coords;
+    const q=await db.from("time_entries").insert({
+      employee_id:emp.id,entry_type:tipo,
+      latitude:c.latitude,longitude:c.longitude,
+      gps_accuracy_m:c.accuracy
+    });
+    if(q.error){
+      st.className="status err"; st.textContent="Erro ao registrar: "+q.error.message;
+    }else{
+      st.className="status ok";
+      st.textContent=tipo+" registrado às "+new Date().toLocaleTimeString("pt-BR");
+      load();
+    }
+  },()=>{
+    st.className="status err";
+    st.textContent="Ative o GPS e permita o acesso à localização.";
+  },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+}
+
+async function load(){
+  const q=await db.from("time_entries")
+    .select("entry_type,recorded_at,latitude,longitude")
+    .eq("employee_id",emp.id)
+    .order("recorded_at",{ascending:false}).limit(30);
+  if(q.error) return;
+  document.getElementById("r").innerHTML=q.data.length
+    ? q.data.map(x=>"<p><b>"+x.entry_type+"</b><br>"+new Date(x.recorded_at).toLocaleString("pt-BR")+"<br>📍 "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+"</p>").join("")
+    : "Nenhum registro ainda.";
+}
+</script>
+</body>
+</html>
